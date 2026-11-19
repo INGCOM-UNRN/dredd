@@ -204,3 +204,64 @@ def test_export_de_revision_sin_auditoria(tmp_path: Path):
     datos = MoodleExporter(workspace_dir=tmp_path)._get_all_activity_data("TP0")
     assert (datos[0]["revision"], datos[0]["compilation_status"]) == ("253ca9a", "SIN REGISTRO")
     assert datos[0]["report_file"].name == "TP0-ana_253ca9a.md"
+
+
+# ── markdown-it-py (decisión del 19/11/26): CommonMark + tablas, sin HTML crudo ──
+
+INFORME = """<!-- dredd-section: callahan, tool=callahan, version=1.0.0, status=fail -->
+## Verificación formal (Callahan)
+
+- **Archivo analizado:** `abs.c`
+- Ver [la regla](https://apunte.example/reglas/0x2003h) y [esto](javascript:alert(1))
+
+> [!CAUTION]
+> **Contratos mal escritos:** Frama-C no pudo leer las anotaciones.
+
+1. Primero
+2. Segundo
+
+| Función | Estado |
+| :--- | :---: |
+| `a\\|b()` | **No probado** |
+
+Código del alumno: <script>alert("x")</script>
+
+---
+"""
+
+
+def test_el_marcado_inline_y_los_enlaces_se_conservan():
+    html = render_html_report(parse_markdown(INFORME))
+    assert "<strong>Archivo analizado:</strong> <code>abs.c</code>" in html  # antes se perdía en las listas
+    assert '<a href="https://apunte.example/reglas/0x2003h">la regla</a>' in html
+    assert 'href="javascript:' not in html
+
+
+def test_sin_html_crudo_ni_comentarios_visibles():
+    bloques = parse_markdown(INFORME)
+    html = render_html_report(bloques)
+    assert "<script>" not in html and "&lt;script&gt;" in html
+    assert "dredd-section" not in html  # el comentario de fusión de secciones no es texto
+    assert all("dredd-section" not in b.text for b in bloques)
+
+
+def test_admonicion_lista_numerada_tabla_y_separador():
+    bloques = parse_markdown(INFORME)
+    tipos = [b.kind for b in bloques]
+    assert tipos == ["h", "li", "nota", "li", "table", "p", "hr"]
+    nota = bloques[2]
+    assert nota.tipo == "caution" and nota.text.startswith("Contratos mal escritos:")
+    assert '<div class="nota nota-caution"><p class="nota-titulo">Cuidado</p>' in nota.html
+    assert "[!CAUTION]" not in nota.html
+    assert bloques[3].ordered and bloques[3].items == ["Primero", "Segundo"]
+    assert bloques[4].rows == [["Función", "Estado"], ["a|b()", "No probado"]]  # `\|` no parte la celda
+    # El enlace `javascript:` ni siquiera es un enlace: queda como texto.
+    assert bloques[1].items[1] == "Ver la regla y [esto](javascript:alert(1))"
+
+
+def test_el_pdf_numera_y_muestra_la_nota(tmp_path: Path):
+    md = tmp_path / "informe.md"
+    md.write_text(INFORME, encoding="utf-8")
+    pdf = export_report(md, fmt="pdf").read_bytes()
+    assert b"1. Primero" in pdf and b"Cuidado: Contratos mal escritos" in pdf
+    assert b"dredd-section" not in pdf

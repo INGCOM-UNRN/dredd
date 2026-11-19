@@ -79,7 +79,7 @@ def cmd_export_report(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Ruta del archivo de salida."),
     title: str = typer.Option("Informe de Evaluación — Dredd", "--title", "-t", help="Título del informe."),
 ) -> None:
-    """Convierte un informe Markdown a HTML autocontenido enriquecido o PDF (zero-dependencies)."""
+    """Convierte un informe Markdown (CommonMark con tablas) a HTML autocontenido o PDF."""
     from dredd.core.report_export import export_report
 
     try:

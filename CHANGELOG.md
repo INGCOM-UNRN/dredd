@@ -16,6 +16,10 @@ versiones según [SemVer](https://semver.org/lang/es/).
 - **cohorte**: `dredd cohorte <carpeta>` arma la planilla de seguimiento de una cohorte de GitHub Classroom (un repo clonado por alumno): estado de cada entrega con el veredicto de perfil de ripley, observaciones más frecuentes con enlace al apunte y tiempos (commits del alumno, último commit y atraso respecto de `--fecha-limite`), en `cohorte.csv`, `cohorte.md` y `cohorte.json`. Lo usa sulaco `cohorte.yml` (Ola 25).
 - **cohorte**: índice de error por concepto (porcentaje de entregas analizadas con observaciones del tema) en `cohorte.md` y en `conceptos.md`, un informe anónimo (sin nombres ni repos) para compartir con todo el equipo; con el cron semanal de sulaco `cohorte.yml` es el informe semanal de qué reforzar en clase. `cluster-errors` y `cohorte` comparten el cálculo (`cohorte.agrupar`) (Ola 26).
 
+### Cambiado
+
+- **export-report**: el Markdown se lee con `markdown-it-py` (CommonMark con tablas) en lugar del parser propio. Se conservan la negrita, el código y los enlaces en listas y párrafos (antes se perdían, incluidos los enlaces al apunte de «Para repasar»), las listas numeradas y `\|` dentro de una celda; las notas `> [!WARNING]` se muestran como recuadros y los comentarios `<!-- dredd-section … -->` ya no aparecen como texto. Sin HTML crudo: un `<script>` del informe sale como texto.
+
 ## [2.1.0] - 2026-09-28
 
 Primera versión con registro de cambios; lo anterior está en el historial de git.

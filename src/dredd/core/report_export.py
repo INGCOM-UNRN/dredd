@@ -5,102 +5,140 @@ from datetime import datetime
 import html as _html
 from pathlib import Path
 import re
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence
+
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 
 @dataclass
 class Block:
-    kind: str  # "h" | "p" | "li" | "code" | "table"
+    kind: str  # "h" | "p" | "li" | "code" | "table" | "nota" | "hr"
     level: int = 0  # para headings
-    text: str = ""
+    text: str = ""  # texto plano (lo que usa el PDF)
     items: List[str] = field(default_factory=list)
     rows: List[List[str]] = field(default_factory=list)
+    html: str = ""  # el bloque en HTML, renderizado por markdown-it
+    ordered: bool = False  # lista numerada
+    tipo: str = ""  # en una nota: note, tip, important, warning, caution
 
 
-_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-_TABLE_ROW = re.compile(r"^\s*\|(.+)\|\s*$")
-_LIST_ITEM = re.compile(r"^\s*[-*]\s+")
+# CommonMark con tablas (GFM) y sin HTML crudo: los informes llevan código y nombres de
+# alumnos, y un `<script>` en una entrega tiene que verse como texto, no ejecutarse.
+# markdown-it además rechaza los enlaces `javascript:` y `data:`.
+_MD = MarkdownIt("commonmark", {"html": False}).enable("table")
+_COMENTARIO = re.compile(r"^\s*<!--.*-->\s*$", re.DOTALL)
+_NOTA = re.compile(r"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*", re.IGNORECASE)
+TITULO_NOTA = {"note": "Nota", "tip": "Sugerencia", "important": "Importante",
+               "warning": "Atención", "caution": "Cuidado"}
 
 
-def _inicia_bloque(linea: str) -> bool:
-    """True si la línea abre un bloque distinto de un párrafo (fence, encabezado, tabla, lista).
+def _plano(inline: Token) -> str:
+    """El texto de un token inline sin marcado (los saltos de línea pasan a espacios)."""
+    partes = []
+    for hijo in inline.children or []:
+        if hijo.type in ("text", "code_inline"):
+            partes.append(hijo.content)
+        elif hijo.type in ("softbreak", "hardbreak"):
+            partes.append(" ")
+        elif hijo.type == "image":
+            partes.append(hijo.content)
+    return "".join(partes).strip()
 
-    Usa los mismos patrones que parse_markdown: una línea que solo *empieza*
-    con `#` o `|` (p. ej. `#include <stdio.h>` o `| sin cierre`) es texto.
-    """
-    return (
-        linea.startswith("```")
-        or bool(_HEADING.match(linea))
-        or bool(_TABLE_ROW.match(linea))
-        or bool(_LIST_ITEM.match(linea))
-    )
+
+def _grupos(tokens: List[Token]) -> List[List[Token]]:
+    """Los tokens partidos por bloque de primer nivel (de cada apertura a su cierre)."""
+    grupos: List[List[Token]] = []
+    actual: List[Token] = []
+    profundidad = 0
+    for tok in tokens:
+        actual.append(tok)
+        profundidad += tok.nesting
+        if profundidad == 0:
+            grupos.append(actual)
+            actual = []
+    if actual:
+        grupos.append(actual)
+    return grupos
 
 
-def _strip_inline(text: str) -> str:
-    """Quita marcado inline (**bold**, `code`, [txt](url)) dejando el texto."""
-    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    return text
+def _render(grupo: List[Token]) -> str:
+    return _MD.renderer.render(grupo, _MD.options, {})
+
+
+def _items(grupo: List[Token]) -> List[str]:
+    """Texto plano de cada ítem de primer nivel de una lista (con sus sublistas)."""
+    items: List[str] = []
+    actual: List[str] = []
+    nivel_item = grupo[0].level + 1
+    for tok in grupo[1:-1]:
+        if tok.type == "list_item_open" and tok.level == nivel_item:
+            actual = []
+        elif tok.type == "list_item_close" and tok.level == nivel_item:
+            items.append(" ".join(t for t in actual if t))
+        elif tok.type == "inline":
+            actual.append(_plano(tok))
+    return items
+
+
+def _filas(grupo: List[Token]) -> List[List[str]]:
+    filas: List[List[str]] = []
+    for tok in grupo:
+        if tok.type == "tr_open":
+            filas.append([])
+        elif tok.type == "inline" and filas:
+            filas[-1].append(_plano(tok))
+    return filas
+
+
+def _nota(grupo: List[Token]) -> Optional[Block]:
+    """`> [!WARNING]` (las admoniciones de GitHub que usan los informes de dredd) como nota."""
+    primero = next((t for t in grupo if t.type == "inline"), None)
+    if primero is None or not (m := _NOTA.match(primero.content)):
+        return None
+    tipo = m.group(1).lower()
+    # Se saca la marca del texto y se vuelve a parsear el contenido de la cita.
+    lineas = []
+    for tok in grupo:
+        if tok.type == "inline":
+            lineas.append(tok.content)
+    cuerpo = _NOTA.sub("", "\n\n".join(lineas), count=1).strip()
+    interior = _MD.render(cuerpo) if cuerpo else ""
+    texto = " ".join(_plano(t) for t in grupo if t.type == "inline")
+    texto = _NOTA.sub("", texto, count=1).strip()
+    html = (f'<div class="nota nota-{tipo}"><p class="nota-titulo">{TITULO_NOTA[tipo]}</p>'
+            f"{interior}</div>\n")
+    return Block(kind="nota", tipo=tipo, text=texto, html=html)
 
 
 def parse_markdown(md_text: str) -> List[Block]:
+    """Bloques de primer nivel del informe, con markdown-it-py (CommonMark + tablas)."""
     blocks: List[Block] = []
-    lines = md_text.replace("\r\n", "\n").split("\n")
-    i = 0
-    while i < len(lines):
-        raw = lines[i]
-        line = raw.rstrip()
-
-        if not line.strip():
-            i += 1
-            continue
-
-        if line.startswith("```"):
-            code: List[str] = []
-            i += 1
-            while i < len(lines) and not lines[i].startswith("```"):
-                code.append(lines[i])
-                i += 1
-            i += 1
-            blocks.append(Block(kind="code", text="\n".join(code)))
-            continue
-
-        m = _HEADING.match(line)
-        if m:
-            blocks.append(Block(kind="h", level=len(m.group(1)), text=m.group(2).strip()))
-            i += 1
-            continue
-
-        if _TABLE_ROW.match(line):
-            rows: List[List[str]] = []
-            while i < len(lines) and (m_fila := _TABLE_ROW.match(lines[i])):
-                cells = [c.strip() for c in m_fila.group(1).split("|")]
-                if not all(re.fullmatch(r":?-{2,}:?", c) for c in cells):
-                    rows.append(cells)
-                i += 1
-            if rows:
-                blocks.append(Block(kind="table", rows=rows))
-            continue
-
-        if _LIST_ITEM.match(line):
-            items: List[str] = []
-            while i < len(lines) and _LIST_ITEM.match(lines[i]):
-                items.append(_strip_inline(_LIST_ITEM.sub("", lines[i]).strip()))
-                i += 1
-            blocks.append(Block(kind="li", items=items))
-            continue
-
-        # Párrafo: consume siempre la línea actual (si no, una línea que empieza
-        # con `#` o `|` sin ser encabezado ni tabla dejaba el índice quieto y el
-        # bucle no terminaba nunca) y sigue hasta una línea vacía o un bloque.
-        para: List[str] = [_strip_inline(line.strip())]
-        i += 1
-        while i < len(lines) and lines[i].strip() and not _inicia_bloque(lines[i].rstrip()):
-            para.append(_strip_inline(lines[i].strip()))
-            i += 1
-        blocks.append(Block(kind="p", text=" ".join(para)))
-
+    for grupo in _grupos(_MD.parse(md_text.replace("\r\n", "\n"))):
+        abre = grupo[0]
+        html = _render(grupo)
+        if abre.type == "heading_open":
+            blocks.append(Block(kind="h", level=int(abre.tag[1]), text=_plano(grupo[1]), html=html))
+        elif abre.type == "paragraph_open":
+            texto = _plano(grupo[1])
+            if _COMENTARIO.match(grupo[1].content):
+                continue  # `<!-- dredd-section: … -->`: metadatos para fusionar secciones, no texto
+            blocks.append(Block(kind="p", text=texto, html=html))
+        elif abre.type in ("bullet_list_open", "ordered_list_open"):
+            blocks.append(Block(kind="li", items=_items(grupo), html=html,
+                                ordered=abre.type == "ordered_list_open"))
+        elif abre.type in ("fence", "code_block"):
+            blocks.append(Block(kind="code", text=abre.content.rstrip("\n"), html=html))
+        elif abre.type == "table_open":
+            blocks.append(Block(kind="table", rows=_filas(grupo), html=html))
+        elif abre.type == "blockquote_open":
+            nota = _nota(grupo)
+            if nota is None:
+                texto = " ".join(_plano(t) for t in grupo if t.type == "inline")
+                nota = Block(kind="nota", text=texto, html=html)
+            blocks.append(nota)
+        elif abre.type == "hr":
+            blocks.append(Block(kind="hr", html=html))
     return blocks
 
 
@@ -126,52 +164,26 @@ th { background:var(--panel); }
 ul { padding-left:22px; }
 li { margin:3px 0; }
 .meta { color:var(--dim); font-size:0.85em; margin-top:-6px; }
+blockquote { margin:14px 0; padding:4px 14px; border-left:4px solid var(--border); color:var(--dim); }
+.nota { margin:14px 0; padding:8px 14px; border-left:4px solid var(--accent); background:var(--panel);
+        border-radius:0 6px 6px 0; }
+.nota p { margin:6px 0; }
+.nota-titulo { font-weight:600; }
+.nota-tip { border-left-color:#15803d; } .nota-tip .nota-titulo { color:#15803d; }
+.nota-important { border-left-color:#7c3aed; } .nota-important .nota-titulo { color:#7c3aed; }
+.nota-warning { border-left-color:#b45309; } .nota-warning .nota-titulo { color:#b45309; }
+.nota-caution { border-left-color:#b91c1c; } .nota-caution .nota-titulo { color:#b91c1c; }
 @media print {
   body { font-size:11pt; }
   .wrap { max-width:none; padding:0; }
   h2 { break-after:avoid; }
-  pre, table, figure { break-inside:avoid; }
+  pre, table, figure, .nota { break-inside:avoid; }
 }
 """
 
 
-def _inline_html(text: str) -> str:
-    parts = re.split(r"(\*\*[^*]+\*\*|`[^`]+`)", text)
-    out = []
-    for part in parts:
-        if part.startswith("**") and part.endswith("**"):
-            out.append(f"<strong>{_html.escape(part[2:-2])}</strong>")
-        elif part.startswith("`") and part.endswith("`"):
-            out.append(f"<code>{_html.escape(part[1:-1])}</code>")
-        else:
-            out.append(_html.escape(part))
-    return "".join(out)
-
-
 def render_html_report(blocks: Sequence[Block], title: str = "Informe de Evaluación — Dredd") -> str:
-    body: List[str] = []
-
-    def inline(text: str) -> str:
-        return _inline_html(text)
-
-    for b in blocks:
-        if b.kind == "h":
-            tag = f"h{min(b.level, 6)}" if b.level >= 1 else "h3"
-            body.append(f"<{tag}>{inline(b.text)}</{tag}>")
-        elif b.kind == "p":
-            body.append(f"<p>{inline(b.text)}</p>")
-        elif b.kind == "li":
-            body.append("<ul>" + "".join(f"<li>{inline(i)}</li>" for i in b.items) + "</ul>")
-        elif b.kind == "code":
-            body.append(f"<pre><code>{_html.escape(b.text)}</code></pre>")
-        elif b.kind == "table":
-            head, *rows = b.rows
-            th = "".join(f"<th>{_html.escape(c)}</th>" for c in head)
-            trs = "".join(
-                "<tr>" + "".join(f"<td>{_html.escape(c)}</td>" for c in row) + "</tr>"
-                for row in rows
-            )
-            body.append(f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>")
+    body: List[str] = [b.html for b in blocks]
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!DOCTYPE html>
@@ -257,11 +269,12 @@ class _PdfDoc:
         for ln in self._wrap(text, 10.5, self.FONTS["F1"][1], self.W_TEXT):
             self._line(ln, font="F1", size=10.5)
 
-    def bullets(self, items: List[str]) -> None:
-        for it in items:
+    def bullets(self, items: List[str], ordered: bool = False) -> None:
+        for n, it in enumerate(items, start=1):
+            marca = f"{n}. " if ordered else "• "
             lines = self._wrap(it, 10.5, self.FONTS["F1"][1], self.W_TEXT - 16)
             for idx, ln in enumerate(lines):
-                self._line(("• " if idx == 0 else "   ") + ln, font="F1", size=10.5, x=MARGIN + 8)
+                self._line((marca if idx == 0 else " " * len(marca)) + ln, font="F1", size=10.5, x=MARGIN + 8)
 
     def code(self, text: str) -> None:
         for ln in text.split("\n"):
@@ -269,7 +282,7 @@ class _PdfDoc:
                 self._line(piece, font="F3", size=9.0, x=MARGIN + 6, color="0.25 0.28 0.33")
 
     def table(self, rows: List[List[str]]) -> None:
-        plain = [[_strip_inline(c) for c in r] for r in rows]
+        plain = [list(r) for r in rows]
         ncols = max(len(r) for r in plain)
         widths: List[int] = []
         for col in range(ncols):
@@ -347,7 +360,10 @@ def render_pdf_report(blocks: Sequence[Block], title: str = "Informe de Evaluaci
         elif b.kind == "p":
             doc.paragraph(b.text)
         elif b.kind == "li":
-            doc.bullets(b.items)
+            doc.bullets(b.items, ordered=b.ordered)
+        elif b.kind == "nota":
+            titulo = TITULO_NOTA.get(b.tipo, "")
+            doc.paragraph(f"{titulo}: {b.text}" if titulo else b.text)
         elif b.kind == "code":
             doc.code(b.text)
         elif b.kind == "table":

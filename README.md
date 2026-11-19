@@ -223,7 +223,7 @@ privado o struct privado copiado en el cliente, con la función pública que lo 
 `hallazgos.json` (categoría `tad`) y descuentan en el criterio `modularidad_y_diseño` de la rúbrica de deckard.
 
 #### Conversión de Informes a HTML / PDF (`dredd export-report`)
-Convierte informes Markdown a HTML enriquecido autocontenido (con CSS embebido) o PDF con formato de imprenta (generación pura en Python sin dependencias externas pesadas):
+Convierte informes Markdown a HTML enriquecido autocontenido (con CSS embebido) o PDF con formato de imprenta (el PDF se genera en Python puro). El Markdown se lee con `markdown-it-py` (CommonMark con tablas, la misma biblioteca que usa rich): negrita, código, enlaces (los del apunte en «Para repasar»), listas numeradas y `\|` dentro de una celda se conservan; las notas `> [!WARNING]` de las secciones se muestran como recuadros y los comentarios `<!-- dredd-section … -->` no aparecen. El HTML crudo del informe (por ejemplo un `<script>` en el código de una entrega) se muestra como texto, nunca se ejecuta, y un enlace `javascript:` no se convierte en enlace.
 
 ```bash
 # Exportar a HTML
@@ -392,7 +392,7 @@ src/dredd/
 | `dredd plagiarism` | Calcula la matriz de similitud Winnowing entre todas las entregas descargadas. |
 | `dredd map` | Mapeo interactivo y heurístico entre archivos C de estudiantes y especificaciones de la guía. |
 | `dredd export` | Exporta calificaciones CSV, paquete ZIP de retroalimentación y dashboard consolidado de cohorte. |
-| `dredd export-report` | Convierte un informe Markdown a HTML autocontenido enriquecido o PDF (zero-dependencies). |
+| `dredd export-report` | Convierte un informe Markdown (CommonMark con tablas) a HTML autocontenido o PDF. |
 | `dredd fuzz-gen` | fuzz-gen: endurece el banco generando casos límite contra la solución modelo. |
 | `dredd oral-guide` | oral-exam-companion: genera una guía de preguntas para coloquio/defensa. |
 | `dredd multiplex` | Alias docente de conveniencia que delega la generación de variantes y asignación en Deckard. |
