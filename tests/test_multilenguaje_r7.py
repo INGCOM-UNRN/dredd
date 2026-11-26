@@ -254,18 +254,19 @@ def test_plagio_winnowing_y_doctor_multilenguaje(tmp_path: Path, monkeypatch):
     assert pares[0].similarity_pct == 100.0
 
     # Doctor por lenguaje sin gcc disponible
-    monkeypatch.setattr(shutil, "which", _which_sin_c(shutil.which))
-    res_doc_py = runner.invoke(app, ["doctor", "--lang", "python", "--json"])
-    assert res_doc_py.exit_code == 0, res_doc_py.output
-    data_py = json.loads(res_doc_py.output)
-    assert data_py["ok"] is True
-    assert data_py["language"] == "python"
-    nombres_py = {c["nombre"] for c in data_py["chequeos"]}
-    assert "python3" in nombres_py and "gcc" not in nombres_py
+    with monkeypatch.context() as mp:
+        mp.setattr(shutil, "which", _which_sin_c(shutil.which))
+        res_doc_py = runner.invoke(app, ["doctor", "--lang", "python", "--json"])
+        assert res_doc_py.exit_code == 0, res_doc_py.output
+        data_py = json.loads(res_doc_py.output)
+        assert data_py["ok"] is True
+        assert data_py["language"] == "python"
+        nombres_py = {c["nombre"] for c in data_py["chequeos"]}
+        assert "python3" in nombres_py and "gcc" not in nombres_py
 
-    res_doc_c = runner.invoke(app, ["doctor", "--lang", "c", "--json"])
-    assert res_doc_c.exit_code == 1
-    assert "gcc" in {c["nombre"] for c in json.loads(res_doc_c.output)["chequeos"]}
+        res_doc_c = runner.invoke(app, ["doctor", "--lang", "c", "--json"])
+        assert res_doc_c.exit_code == 1
+        assert "gcc" in {c["nombre"] for c in json.loads(res_doc_c.output)["chequeos"]}
 
     # Compatibilidad con dredd.yaml legacy sin clave language
     legacy_ws = tmp_path / "legacy_ws"

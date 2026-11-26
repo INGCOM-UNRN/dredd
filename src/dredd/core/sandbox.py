@@ -163,12 +163,13 @@ def audit_sandbox_evasion(code: str, filename: str = "entrega.c") -> List[Securi
 
 def _set_resource_limits(max_memory_mb: int = 64, max_cpu_seconds: int = 5) -> None:
     """Configura límites estrictos de recursos para el proceso hijo usando setrlimit."""
-    try:
-        mem_bytes = max_memory_mb * 1024 * 1024
-        # Límite de memoria virtual (RLIMIT_AS)
-        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-    except Exception:
-        pass
+    if max_memory_mb > 0:
+        try:
+            mem_bytes = max_memory_mb * 1024 * 1024
+            # Límite de memoria virtual (RLIMIT_AS)
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+        except Exception:
+            pass
 
     try:
         # Límite de tiempo de CPU
