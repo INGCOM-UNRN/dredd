@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -184,12 +185,15 @@ def test_evaluacion_completa_python_y_java_sin_gcc_ni_tree_sitter_c(tmp_path: Pa
     datos_py = json.loads(res_cli_py.output)
     assert datos_py["results"][0]["compilation_ok"] is True
     assert datos_py["results"][0]["tests_passed"] == 1
-    assert datos_py["results"][0]["ast_observations"] >= 1
+    tiene_ripley_py = resolve_sibling_cli("ripley-py") is not None or importlib.util.find_spec("ripley_py") is not None
+    if tiene_ripley_py:
+        assert datos_py["results"][0]["ast_observations"] >= 1
 
     # Validar esquema Yutani directo desde run_ripley_analysis
     analisis_py = run_ripley_analysis(sub_py, workspace_dir=ws_py, language="python")
     assert analisis_py["language"] == "python"
-    assert any(h.get("codigo") == "KPY001" for h in analisis_py["ast_findings"])
+    if tiene_ripley_py:
+        assert any(h.get("codigo") == "KPY001" for h in analisis_py["ast_findings"])
 
     # 2. Cohorte Java sin gcc ni tree-sitter-c
     ws_java = tmp_path / "ws_java"
@@ -214,8 +218,10 @@ def test_evaluacion_completa_python_y_java_sin_gcc_ni_tree_sitter_c(tmp_path: Pa
     analisis_java = run_ripley_analysis(sub_java, language="java")
     assert analisis_java["language"] == "java"
     assert analisis_java["compilation"]["success"] is True
+    tiene_ripley_java = resolve_sibling_cli("ripley-java") is not None or importlib.util.find_spec("ripley_java") is not None
     codigos_java = {h.get("codigo") for h in analisis_java["ast_findings"]}
-    assert "MJA001" in codigos_java
+    if tiene_ripley_java:
+        assert "MJA001" in codigos_java
     if shutil.which("javac") and shutil.which("java"):
         assert analisis_java["tests"]["passed"] == 1
 
