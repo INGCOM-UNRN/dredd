@@ -29,8 +29,10 @@ def cmd_plagiarism(
     estructural: bool = typer.Option(False, "--estructural", help="Cruzar con la similitud del AST de weyl: ve el mismo programa con otros nombres y otro orden."),
     umbral_estructural: float = typer.Option(90.0, "--umbral-estructural", min=0.0, max=100.0, help="Similitud del AST (%) a partir de la cual se informa un par."),
     matriz: Optional[Path] = typer.Option(None, "--matriz", help="Con --estructural, escribir la matriz completa del AST en este CSV."),
+    engine: str = typer.Option("auto", "--engine", help="Motor de similitud: auto (usa JPlag si está disponible), jplag o winnowing."),
+    lang: str = typer.Option("auto", "--lang", help="Lenguaje de las entregas (auto, c, python, java)."),
 ) -> None:
-    """Calcula la matriz de similitud Winnowing entre todas las entregas descargadas.
+    """Calcula la matriz de similitud (JPlag o Winnowing) entre todas las entregas descargadas.
 
     Con `--estructural`, cruza cada par con la similitud del AST de weyl. Una similitud alta es un
     indicio para mirar a mano, no una prueba de copia.
@@ -41,19 +43,24 @@ def cmd_plagiarism(
         raise typer.Exit(code=1)
 
     # La política de la cátedra está en dredd.yaml; antes se ignoraba y valía siempre 0.60 (F-04).
-    from dredd.core.config import load_dredd_config
+    from dredd.core.config import DreddConfig, load_dredd_config
     cfg = load_dredd_config(Path.cwd()) or load_dredd_config(submissions_dir)
     if threshold is None:
         threshold = cfg.checks.plagiarism_threshold if cfg else 0.60
     quitar_plantilla = cfg.checks.plagiarism_strip_boilerplate if cfg else True
-    console.print(f"[dim]Umbral de similitud: {threshold*100:.0f}%[/dim]")
+    lang_eff = (cfg or DreddConfig()).get_language(
+        activity_slug=exercise_slug,
+        target_path=submissions_dir,
+        cli_override=lang,
+    )
+    console.print(f"[dim]Umbral de similitud: {threshold*100:.0f}% (motor: {engine})[/dim]")
 
     if strip_template:
         console.print(f"[dim]boiler-strip activo contra: {strip_template}[/dim]")
     elif not quitar_plantilla:
         console.print("[dim]boiler-strip desactivado (checks.plagiarism.strip_boilerplate: false)[/dim]")
 
-    detector = PlagiarismDetector(threshold=threshold, plantilla=strip_template)
+    detector = PlagiarismDetector(threshold=threshold, plantilla=strip_template, engine=engine, language=lang_eff)
     matches = detector.analyze_submissions(submissions_dir, buscar_plantilla=quitar_plantilla)
 
     if estructural:
@@ -124,8 +131,9 @@ def cmd_map(
     exercises: Optional[List[str]] = typer.Option(None, "--exercise", "-e", help="Nombres de los ejercicios disponibles (ej. -e ej1 -e ej2)."),
     unmapped_only: bool = typer.Option(False, "--unmapped-only", "-u", help="Revisar únicamente archivos no vinculados."),
     auto: bool = typer.Option(False, "--auto", "-a", help="Aplicar coincidencias heurísticas obvias automáticamente."),
+    lang: Optional[str] = typer.Option(None, "--lang", help="Lenguaje de las entregas (auto, c, python, java)."),
 ) -> None:
-    """Mapeo interactivo y heurístico entre archivos C de estudiantes y especificaciones de la guía."""
+    """Mapeo interactivo y heurístico entre archivos fuente de estudiantes y especificaciones de la guía."""
     from dredd.core.mapping import InteractiveMapper
 
     workspace_dir = Path.cwd()
@@ -145,7 +153,7 @@ def cmd_map(
     else:
         avail = ["ejercicio1", "ejercicio2", "ejercicio3"]
 
-    mapper = InteractiveMapper(workspace_dir, exercise_slug, console=console, submissions_dir=submissions_dir)
+    mapper = InteractiveMapper(workspace_dir, exercise_slug, console=console, submissions_dir=submissions_dir, language=lang or "auto")
     changes = mapper.run_interactive_session(avail, unmapped_only=unmapped_only, auto_apply=auto)
     console.print(f"[bold green]✓ Sesión finalizada: {changes} mapeo(s) actualizados.[/bold green]")
 
@@ -303,12 +311,13 @@ def oral_guide(
     ejercicio: Optional[str] = typer.Option(None, "--ejercicio", help="TP/parcial asociado."),
     salida: Optional[Path] = typer.Option(None, "-o", "--salida", help="Archivo .md destino (por defecto, stdout)."),
     sin_ripley: bool = typer.Option(False, "--sin-ripley", help="No correr análisis técnico."),
+    lang: str = typer.Option("auto", "--lang", help="Lenguaje del repositorio (auto, c, python, java)."),
 ) -> None:
     """oral-exam-companion: genera una guía de preguntas para coloquio/defensa."""
     from dredd.core.oral_guide import generar_guia
 
     guia = generar_guia(repo, nombre_alumno=alumno, ejercicio=ejercicio,
-                        correr_ripley=not sin_ripley)
+                        correr_ripley=not sin_ripley, language=lang)
     if salida:
         salida.write_text(guia, encoding="utf-8")
         console.print(f"[green]✓ Guía oral generada[/green] → {salida}")
@@ -372,16 +381,17 @@ def cmd_multiplex(
 
 def cmd_doctor(
     json_output: bool = typer.Option(False, "--json", help="Emitir el diagnóstico como JSON (schema_version 1.0.0)."),
+    lang: str = typer.Option("all", "--lang", help="Perfil de lenguaje a diagnosticar (all, auto, c, python, java)."),
 ) -> None:
-    """Verifica dependencias externas del sistema (GCC, Valgrind, Bubblewrap, Git, Ripley)."""
+    """Verifica dependencias externas del sistema según el perfil de lenguaje (Git, compiladores, sandbox y satélites)."""
     from dredd.core.doctor import diagnosticar, ejecutar_diagnostico_doctor, informe_json
     if json_output:
-        informe = informe_json(diagnosticar())
+        informe = informe_json(diagnosticar(lang=lang), language=lang)
         print(json.dumps(informe, ensure_ascii=False, indent=2))
         if not informe["ok"]:
             raise typer.Exit(code=1)
         return
-    ok = ejecutar_diagnostico_doctor(console=console)
+    ok = ejecutar_diagnostico_doctor(console=console, lang=lang)
     if not ok:
         raise typer.Exit(code=1)
 

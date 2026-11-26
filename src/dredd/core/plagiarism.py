@@ -79,9 +79,12 @@ def directorios_de_entrega(submissions_dir: Path) -> List[Path]:
     ]
 
 
-def entregas_de_cohorte(submissions_dir: Path) -> Dict[str, List[Path]]:
-    """Los `.c` de cada estudiante: los mismos que lee el detector de Winnowing."""
-    return {d.name: sorted(d.glob("**/*.c")) for d in directorios_de_entrega(submissions_dir)}
+def entregas_de_cohorte(submissions_dir: Path, language: str = "auto") -> Dict[str, List[Path]]:
+    """Archivos fuente de cada estudiante según el adaptador de lenguaje activo."""
+    from dredd.core.lenguajes import resolver_adaptador
+
+    adaptador = resolver_adaptador(language, submissions_dir)
+    return {d.name: adaptador.archivos_fuente(d) for d in directorios_de_entrega(submissions_dir)}
 
 
 @dataclass
@@ -94,66 +97,126 @@ class SimilarityMatch:
     total_b: int
 
 
+def run_jplag_cohort(
+    submissions_dir: Path,
+    language: str = "c",
+    base_code_dir: Optional[Path] = None,
+    threshold: float = 0.7,
+) -> List[SimilarityMatch]:
+    """Ejecuta JPlag vía `yutani.jplag` sobre una cohorte y devuelve pares como `SimilarityMatch`."""
+    from yutani.jplag import ejecutar_jplag
+
+    pares = ejecutar_jplag(
+        submissions_dir,
+        lenguaje=language,
+        codigo_base=base_code_dir,
+        umbral=threshold,
+    )
+    return [
+        SimilarityMatch(
+            student_a=str(p["entrega_a"]),
+            student_b=str(p["entrega_b"]),
+            similarity_pct=round(float(p["similitud_pct"]), 1),
+            shared_fingerprints=int(p.get("coincidencias", 0)),
+            total_a=int(p.get("tokens_a", 0)),
+            total_b=int(p.get("tokens_b", 0)),
+        )
+        for p in pares
+    ]
+
+
 class PlagiarismDetector:
     """Analiza la cohorte de entregas descargadas en <ejercicio>-submissions/."""
 
     def __init__(self, k: int = 8, w: int = 4, threshold: float = 0.60,
-                 plantilla: Optional[Path] = None):
+                 plantilla: Optional[Path] = None,
+                 engine: str = "auto",
+                 language: str = "auto"):
         self.k = k
         self.w = w
         self.threshold = threshold
+        self.engine = engine
+        self.language = language
         # boiler-strip (nuevas.md): si hay plantilla de cátedra, se sanitizan
         # las entregas antes de calcular huellas.
         self._stripper = None
         if plantilla is not None:
             from dredd.core.boiler_strip import BoilerStripper
+            from dredd.core.lenguajes import extensiones_fuente_globales, normalizar_lenguaje, resolver_adaptador
+
             stripper = BoilerStripper(ventanas_minimas=2)
-            stripper.cargar_plantilla(plantilla)
+            norm = normalizar_lenguaje(language)
+            exts = extensiones_fuente_globales() if norm == "auto" else resolver_adaptador(norm).extensiones_fuente
+            stripper.cargar_plantilla(plantilla, extensiones=exts)
             self._stripper = stripper
 
-    def _codigo_sanitizado(self, student_dir: Path) -> str:
+    def _codigo_sanitizado(self, student_dir: Path, language: Optional[str] = None) -> str:
+        from dredd.core.lenguajes import resolver_adaptador
+
+        adaptador = resolver_adaptador(language or self.language, student_dir)
         trozos: List[str] = []
-        for c_file in sorted(student_dir.glob("**/*.c")):
-            code = c_file.read_text(encoding="utf-8", errors="replace")
+        for src_file in adaptador.archivos_fuente(student_dir):
+            code = src_file.read_text(encoding="utf-8", errors="replace")
             if self._stripper is not None:
                 trozos.append(self._stripper.limpiar(code))
             else:
                 trozos.append(code)
         return "\n\n".join(trozos)
 
-    def extract_fingerprints_from_dir(self, student_dir: Path) -> Set[int]:
+    def extract_fingerprints_from_dir(self, student_dir: Path, language: Optional[str] = None) -> Set[int]:
+        from dredd.core.lenguajes import resolver_adaptador
+
         fps: Set[int] = set()
         try:
-            code = self._codigo_sanitizado(student_dir)
-            tokens = tokenize_c_code(code)
+            adaptador = resolver_adaptador(language or self.language, student_dir)
+            code = self._codigo_sanitizado(student_dir, language=adaptador.nombre)
+            tokens = adaptador.tokenizar_fallback(code)
             fps.update(compute_winnowing_fingerprints(tokens, k=self.k, w=self.w))
         except Exception:
             pass
         return fps
 
-    def extract_fingerprints_from_code(self, code: str) -> Set[int]:
-        tokens = tokenize_c_code(code)
+    def extract_fingerprints_from_code(self, code: str, language: Optional[str] = None) -> Set[int]:
+        from dredd.core.lenguajes import normalizar_lenguaje, resolver_adaptador
+
+        norm = normalizar_lenguaje(language or self.language)
+        adaptador = resolver_adaptador("c" if norm == "auto" else norm)
+        tokens = adaptador.tokenizar_fallback(code)
         return compute_winnowing_fingerprints(tokens, k=self.k, w=self.w)
 
-    def calculate_similarity(self, file_or_code_a: Path | str, file_or_code_b: Path | str) -> float:
-        """Calcula la similitud de Jaccard/Containment entre dos códigos o archivos C."""
+    def calculate_similarity(
+        self,
+        file_or_code_a: Path | str,
+        file_or_code_b: Path | str,
+        language: Optional[str] = None,
+    ) -> float:
+        """Calcula la similitud de Jaccard/Containment entre dos códigos o archivos fuente."""
+        from dredd.core.lenguajes import normalizar_lenguaje, resolver_adaptador
+
+        path_ref: Optional[Path] = None
         if isinstance(file_or_code_a, (Path, str)) and Path(file_or_code_a).is_file():
-            code_a = Path(file_or_code_a).read_text(encoding="utf-8", errors="replace")
+            path_ref = Path(file_or_code_a)
+            code_a = path_ref.read_text(encoding="utf-8", errors="replace")
         else:
             code_a = str(file_or_code_a)
 
         if isinstance(file_or_code_b, (Path, str)) and Path(file_or_code_b).is_file():
-            code_b = Path(file_or_code_b).read_text(encoding="utf-8", errors="replace")
+            path_b = Path(file_or_code_b)
+            path_ref = path_ref or path_b
+            code_b = path_b.read_text(encoding="utf-8", errors="replace")
         else:
             code_b = str(file_or_code_b)
 
-        fps_a = self.extract_fingerprints_from_code(code_a)
-        fps_b = self.extract_fingerprints_from_code(code_b)
+        norm = normalizar_lenguaje(language or self.language)
+        adaptador = resolver_adaptador(norm, path_ref) if (norm != "auto" or path_ref) else resolver_adaptador("c")
+
+        fps_a = self.extract_fingerprints_from_code(code_a, language=adaptador.nombre)
+        fps_b = self.extract_fingerprints_from_code(code_b, language=adaptador.nombre)
 
         if not fps_a or not fps_b:
             # Fallback a comparación de tokens directamente
-            t_a = set(t[0] for t in tokenize_c_code(code_a))
-            t_b = set(t[0] for t in tokenize_c_code(code_b))
+            t_a = set(t[0] for t in adaptador.tokenizar_fallback(code_a))
+            t_b = set(t[0] for t in adaptador.tokenizar_fallback(code_b))
             if not t_a or not t_b:
                 return 1.0 if code_a.strip() == code_b.strip() else 0.0
             return len(t_a.intersection(t_b)) / len(t_a.union(t_b))
@@ -163,8 +226,15 @@ class PlagiarismDetector:
 
     def analyze_submissions(self, submissions_dir: Path, threshold: Optional[float] = None,
                             plantilla: Optional[Path] = None,
-                            buscar_plantilla: bool = True) -> List[SimilarityMatch]:
+                            buscar_plantilla: bool = True,
+                            engine: Optional[str] = None,
+                            language: Optional[str] = None) -> List[SimilarityMatch]:
         """`buscar_plantilla=False` (strip_boilerplate: false) no usa el `_baseline` encontrado solo."""
+        from dredd.core.lenguajes import resolver_adaptador
+
+        engine_eff = engine if engine is not None else getattr(self, "engine", "auto")
+        if engine_eff not in ("auto", "jplag", "winnowing"):
+            raise ValueError(f"Motor desconocido {engine_eff!r}: usá auto, jplag o winnowing.")
         if plantilla is None and buscar_plantilla:
             try:
                 from dredd.core.baseline import find_baseline_dir
@@ -173,17 +243,33 @@ class PlagiarismDetector:
                     plantilla = b_dir
             except Exception:
                 pass
-        if plantilla is not None and self._stripper is None:
-            self.__init__(k=self.k, w=self.w, threshold=self.threshold, plantilla=plantilla)  # type: ignore[misc]
         thresh = threshold if threshold is not None else self.threshold
         if not submissions_dir.is_dir():
             return []
+
+        adaptador = resolver_adaptador(language or getattr(self, "language", "auto"), submissions_dir)
+        lang_eff = adaptador.nombre
+
+        if engine_eff == "jplag":
+            return run_jplag_cohort(submissions_dir, language=lang_eff, base_code_dir=plantilla, threshold=thresh)
+        if engine_eff == "auto":
+            try:
+                from yutani.jplag import jplag_disponible
+                if jplag_disponible()[0]:
+                    return run_jplag_cohort(
+                        submissions_dir, language=lang_eff, base_code_dir=plantilla, threshold=thresh
+                    )
+            except Exception:
+                pass
+
+        if plantilla is not None and self._stripper is None:
+            self.__init__(k=self.k, w=self.w, threshold=self.threshold, plantilla=plantilla, engine=engine_eff, language=lang_eff)  # type: ignore[misc]
 
         student_dirs = directorios_de_entrega(submissions_dir)
         student_fps: Dict[str, Set[int]] = {}
 
         for s_dir in student_dirs:
-            fps = self.extract_fingerprints_from_dir(s_dir)
+            fps = self.extract_fingerprints_from_dir(s_dir, language=lang_eff)
             if fps:
                 student_fps[s_dir.name] = fps
 
@@ -250,8 +336,11 @@ def generate_plagiarism_html_report(
         dir_a = submissions_dir / m.student_a
         dir_b = submissions_dir / m.student_b
 
-        code_a = "\n\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(dir_a.glob("**/*.c"))) if dir_a.is_dir() else ""
-        code_b = "\n\n".join(f.read_text(encoding="utf-8", errors="replace") for f in sorted(dir_b.glob("**/*.c"))) if dir_b.is_dir() else ""
+        from dredd.core.lenguajes import resolver_adaptador
+        ad_a = resolver_adaptador("auto", dir_a) if dir_a.is_dir() else None
+        ad_b = resolver_adaptador("auto", dir_b) if dir_b.is_dir() else None
+        code_a = "\n\n".join(f.read_text(encoding="utf-8", errors="replace") for f in ad_a.archivos_fuente(dir_a)) if (ad_a and dir_a.is_dir()) else ""
+        code_b = "\n\n".join(f.read_text(encoding="utf-8", errors="replace") for f in ad_b.archivos_fuente(dir_b)) if (ad_b and dir_b.is_dir()) else ""
 
         diff_html = difflib.HtmlDiff(wrapcolumn=60).make_table(
             code_a.splitlines(),
