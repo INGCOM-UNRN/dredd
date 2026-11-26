@@ -270,7 +270,7 @@ def fuzz_gen(
     try:  # con el extra `ecosistema`, el generador de drake (el dueño del fuzzing)
         from drake.core.generar_casos import generar_testcases
     except ImportError:
-        from dredd.core.fuzz_gen import generar_testcases
+        from dredd.core.fuzz_gen import generar_testcases  # type: ignore[assignment]
 
     espec = None
     if spec:

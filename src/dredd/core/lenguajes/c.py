@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,14 +32,13 @@ class AdaptadorC(AdaptadorLenguaje):
 
         if (ruta / "Makefile").is_file() or (ruta / "makefile").is_file():
             res = compile_with_make(ruta)
-            return res.to_dict()
+            return asdict(res)
         fuentes = [f for f in self.archivos_fuente(ruta) if f.suffix.lower() == ".c"]
         if not fuentes:
             return {"success": True, "errors": [], "warnings": [], "compiler": "none"}
         flags = getattr(checks, "compiler_flags", "-Wall -Wextra -std=c11")
-        prefer = getattr(checks, "daedalus_compiler", "daedalus")
-        res = compile_c_sources(fuentes, extra_flags=flags.split(), prefer_compiler=prefer)
-        return res.to_dict()
+        res = compile_c_sources(fuentes, extra_flags=flags.split())
+        return asdict(res)
 
     def analizar_estatico(self, ruta: Path, checks: Any = None) -> List[Dict[str, Any]]:
         from dredd.core.config import ToolChecksConfig
