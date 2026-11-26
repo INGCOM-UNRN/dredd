@@ -12,15 +12,10 @@ import bisect
 from collections import defaultdict
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-import tree_sitter_c as tsc
-from tree_sitter import Language, Parser, Node, Query
-
-try:
-    from tree_sitter import QueryCursor
-except ImportError:  # tree-sitter < 0.25: las capturas salen de Query
-    QueryCursor = None  # type: ignore[misc,assignment]
+if TYPE_CHECKING:
+    from tree_sitter import Language, Node, Parser, Query
 
 
 def _get_line_starts(content_bytes: bytes) -> List[int]:
@@ -36,28 +31,35 @@ def _byte_to_line(starts: List[int], byte_offset: int) -> int:
     """Traduce un offset de byte a un número de línea 1-indexed mediante búsqueda binaria."""
     return bisect.bisect_right(starts, byte_offset)
 
-_C_LANGUAGE: Optional[Language] = None
-_PARSER: Optional[Parser] = None
-_VAR_QUERY: Optional[Query] = None
+_C_LANGUAGE: Optional["Language"] = None
+_PARSER: Optional["Parser"] = None
+_VAR_QUERY: Optional["Query"] = None
 
 
-def get_c_language() -> Language:
+def get_c_language() -> "Language":
     global _C_LANGUAGE
     if _C_LANGUAGE is None:
+        import tree_sitter_c as tsc
+        from tree_sitter import Language
+
         _C_LANGUAGE = Language(tsc.language())
     return _C_LANGUAGE
 
 
-def get_c_parser() -> Parser:
+def get_c_parser() -> "Parser":
     global _PARSER
     if _PARSER is None:
+        from tree_sitter import Parser
+
         _PARSER = Parser(get_c_language())
     return _PARSER
 
 
-def get_var_query() -> Query:
+def get_var_query() -> "Query":
     global _VAR_QUERY
     if _VAR_QUERY is None:
+        from tree_sitter import Query
+
         _VAR_QUERY = Query(
             get_c_language(),
             """
@@ -105,9 +107,13 @@ def get_var_query() -> Query:
     return _VAR_QUERY
 
 
-def _run_query_captures(query: Query, root_node: Node) -> Dict[str, List[Node]]:
+def _run_query_captures(query: "Query", root_node: "Node") -> Dict[str, List["Node"]]:
     """Ejecuta una consulta AST abstrayendo diferencias entre versiones de tree-sitter."""
     try:
+        try:
+            from tree_sitter import QueryCursor
+        except ImportError:
+            QueryCursor = None  # type: ignore[misc,assignment]
         if QueryCursor is not None:
             raw = QueryCursor(query).captures(root_node)
         else:
@@ -196,9 +202,11 @@ _RE_GETS = re.compile(r'\bgets\s*\(')
 _GLOBAL_VAR_QUERY: Optional[Query] = None
 
 
-def get_global_var_query() -> Query:
+def get_global_var_query() -> "Query":
     global _GLOBAL_VAR_QUERY
     if _GLOBAL_VAR_QUERY is None:
+        from tree_sitter import Query
+
         _GLOBAL_VAR_QUERY = Query(
             get_c_language(),
             """

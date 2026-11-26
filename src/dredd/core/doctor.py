@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import shutil
 import subprocess
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from rich.console import Console
 from rich.markup import escape
@@ -61,24 +62,52 @@ def chequear_capacidades_kernel() -> Dict[str, bool]:
     return {"unshare_user": True, "bwrap_functional": bwrap_ok}
 
 
-HERRAMIENTAS = [
-    ("gcc", "Compilación de código C (fallback nativo)", True, "sudo apt install build-essential"),
-    ("daedalus", "Compilador pedagógico oficial con flags cátedra P1", False, "uv tool install git+https://github.com/INGCOM-UNRN-P1/daedalus"),
-    ("valgrind", "Detección de fugas de memoria y memory errors", False, "sudo apt install valgrind"),
-    ("nostromo", "Sandbox de aislamiento Bubblewrap y runner de tests", False, "uv tool install git+https://github.com/INGCOM-UNRN-P1/nostromo"),
-    ("bwrap", "Sandbox de aislamiento Bubblewrap en el sistema", False, "sudo apt install bubblewrap"),
+HERRAMIENTAS: List[Tuple[str, str, bool, str]] = [
     ("git", "Operaciones de repositorio y auditoría de commits", True, "sudo apt install git"),
-    ("gaff", "Linter canónico de reglas de estilo de cátedra", False, "uv tool install git+https://github.com/INGCOM-UNRN-P1/gaff"),
-    ("spunkmeyer", "Detector de antipatrones didácticos C", False, "uv tool install git+https://github.com/INGCOM-UNRN-P1/spunkmeyer"),
-    ("ripley", "Motor de análisis pedagógico P1 (satélite opcional)", False, "uv tool install git+https://github.com/INGCOM-UNRN-P1/ripley"),
+    ("bwrap", "Sandbox de aislamiento Bubblewrap en el sistema", False, "sudo apt install bubblewrap"),
     ("deckard", "Integración con guías y bancos de ejercicios", False, "uv tool install git+https://github.com/INGCOM-UNRN/deckard"),
 ]
 
 
-def diagnosticar() -> List[Dict[str, Any]]:
-    """Estado de cada herramienta y del sandbox (sin imprimir nada)."""
+def _herramientas_para(lang: str = "all") -> List[Tuple[str, str, bool, str]]:
+    from dredd.core.config import DreddConfig, load_dredd_config
+    from dredd.core.lenguajes import listar_adaptadores, normalizar_lenguaje
+
+    limpio = str(lang or "all").strip().lower()
+    if limpio == "auto":
+        cfg = load_dredd_config(Path.cwd())
+        if cfg is not None:
+            norm_cfg = normalizar_lenguaje(cfg.workspace.language)
+            limpio = "all" if norm_cfg == "auto" else norm_cfg
+        else:
+            limpio = "all"
+
+    registro = listar_adaptadores()
+    lista: List[Tuple[str, str, bool, str]] = list(HERRAMIENTAS)
+    vistos = {cmd for cmd, *_ in lista}
+
+    if limpio == "all":
+        for nombre in sorted(registro):
+            for cmd, desc, _req, fix in registro[nombre].chequeos_doctor():
+                if cmd not in vistos:
+                    vistos.add(cmd)
+                    # En perfil global 'all', solo git es obligatorio universal.
+                    lista.append((cmd, desc, False, fix))
+    else:
+        norm = normalizar_lenguaje(limpio)
+        if norm not in registro:
+            raise ValueError(f"Lenguaje desconocido en doctor: {lang!r}")
+        for cmd, desc, req, fix in registro[norm].chequeos_doctor():
+            if cmd not in vistos:
+                vistos.add(cmd)
+                lista.append((cmd, desc, req, fix))
+    return lista
+
+
+def diagnosticar(lang: str = "all") -> List[Dict[str, Any]]:
+    """Estado de cada herramienta y del sandbox según perfil de lenguaje (`all`, `auto`, `c`, `python`, `java`)."""
     chequeos = []
-    for cmd, desc, obligatorio, fix in HERRAMIENTAS:
+    for cmd, desc, obligatorio, fix in _herramientas_para(lang):
         info = chequear_herramienta(cmd)
         funciona = info["disponible"] and not info["falla"]
         if funciona:
@@ -96,6 +125,22 @@ def diagnosticar() -> List[Dict[str, Any]]:
             "proposito": desc,
             "sugerencia": "" if funciona else (f"Reinstalá: {fix}" if info["falla"] else fix),
         })
+
+    try:
+        from yutani.jplag import jplag_disponible
+        jplag_ok, jplag_det = jplag_disponible()
+    except Exception as exc:
+        jplag_ok, jplag_det = False, str(exc)
+    chequeos.append({
+        "nombre": "jplag",
+        "requerido": False,
+        "ok": jplag_ok,
+        "falla": False,
+        "detalle": jplag_det,
+        "proposito": "Detección de plagio multi-lenguaje (Winnowing como fallback)",
+        "sugerencia": "" if jplag_ok else "mother instalar --perfil docente --setup-jplag",
+    })
+
     capacidades = chequear_capacidades_kernel()
     chequeos.append({
         "nombre": "sandbox",
@@ -109,7 +154,7 @@ def diagnosticar() -> List[Dict[str, Any]]:
     return chequeos
 
 
-def informe_json(chequeos: List[Dict[str, Any]]) -> Dict[str, Any]:
+def informe_json(chequeos: List[Dict[str, Any]], language: str = "all") -> Dict[str, Any]:
     """Sobre JSON común de `doctor --json` (schema_version 1.0.0)."""
     from dredd import __version__
 
@@ -117,21 +162,22 @@ def informe_json(chequeos: List[Dict[str, Any]]) -> Dict[str, Any]:
         "schema_version": "1.0.0",
         "herramienta": "dredd",
         "version": __version__,
+        "language": language,
         "ok": all(c["ok"] for c in chequeos if c["requerido"]),
         "chequeos": chequeos,
     }
 
 
-def ejecutar_diagnostico_doctor(console: Optional[Console] = None) -> bool:
+def ejecutar_diagnostico_doctor(console: Optional[Console] = None, lang: str = "all") -> bool:
     """Muestra el diagnóstico completo de Dredd."""
     cons = console or Console()
-    tabla = Table(title="🏥 Diagnóstico del Entorno de Dredd (doctor)", border_style="cyan")
+    tabla = Table(title=f"🏥 Diagnóstico del Entorno de Dredd (doctor · {lang})", border_style="cyan")
     tabla.add_column("Herramienta", style="bold white")
     tabla.add_column("Estado", justify="center")
     tabla.add_column("Versión / Ruta", style="dim")
     tabla.add_column("Propósito / Acción sugerida", style="yellow")
 
-    chequeos = diagnosticar()
+    chequeos = diagnosticar(lang=lang)
     todo_ok = True
     for chequeo in chequeos:
         if chequeo["nombre"] == "sandbox":

@@ -330,6 +330,7 @@ class MappingRule:
     # False: la actividad se corrige sin casos de la cátedra a propósito (p. ej. una cohorte que
     # resolvió otra versión de la consigna); config validate lo informa sin avisar.
     casos_catedra: bool = True
+    language: Optional[str] = None
 
     def matches_zip(self, zip_filename: str) -> bool:
         """Verifica si el nombre de archivo ZIP coincide con el patrón configurado."""
@@ -376,6 +377,8 @@ class WorkspaceSettings:
     # Banco central de deckard (<banco>/<id>/ejercicio.yaml, solucion.c, enunciado.md, tests/):
     # de ahí salen los ejercicios de una guía que no tienen .ripkg ni carpeta propia.
     deckard_bank_dir: str = ""
+    language: str = "auto"
+    adapter_config: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -385,6 +388,37 @@ class DreddConfig:
     mapeos: List[MappingRule] = field(default_factory=list)
     raw_data: Dict[str, Any] = field(default_factory=dict)
     config_path: Optional[Path] = None
+
+    def get_language(
+        self,
+        activity_slug: Optional[str] = None,
+        target_path: Optional[Path] = None,
+        cli_override: Optional[str] = None,
+    ) -> str:
+        """Determina el lenguaje efectivo: CLI override > entrega > workspace > autodetección > c."""
+        from dredd.core.lenguajes import detectar_lenguaje, normalizar_lenguaje
+
+        if cli_override is not None and hasattr(cli_override, "default"):
+            cli_override = cli_override.default
+        if isinstance(cli_override, str):
+            norm_cli = normalizar_lenguaje(cli_override)
+            if norm_cli != "auto":
+                return norm_cli
+
+        if activity_slug:
+            rule = self.find_mapping_for_activity(activity_slug)
+            if rule and rule.language:
+                norm_rule = normalizar_lenguaje(rule.language)
+                if norm_rule != "auto":
+                    return norm_rule
+
+        norm_ws = normalizar_lenguaje(getattr(self.workspace, "language", "auto"))
+        if norm_ws != "auto":
+            return norm_ws
+
+        if target_path is not None:
+            return detectar_lenguaje(target_path)
+        return "c"
 
     def get_delivery_mode(
         self,
@@ -562,6 +596,8 @@ class DreddConfig:
                 item["repo_pattern"] = m.repo_pattern
             if m.branch:
                 item["branch"] = m.branch
+            if m.language:
+                item["language"] = m.language
             mapeos_list.append(item)
 
         data = {
@@ -577,6 +613,8 @@ class DreddConfig:
                 "default_source": self.workspace.default_source,
                 "github_default_branch": self.workspace.github_default_branch,
                 **({"deckard_bank_dir": self.workspace.deckard_bank_dir} if self.workspace.deckard_bank_dir else {}),
+                **({"language": self.workspace.language} if self.workspace.language and self.workspace.language != "auto" else {}),
+                **({"adapter_config": self.workspace.adapter_config} if self.workspace.adapter_config else {}),
             },
             "checks": self.checks.to_dict(),
             "mapeos": mapeos_list,
@@ -599,7 +637,7 @@ def load_dredd_config(workspace_dir: Optional[Path | str] = None) -> Optional[Dr
                         continue
 
                     # Advertir claves de primer nivel desconocidas
-                    KNOWN_ROOT_KEYS = {"workspace", "checks", "mapeos", "version"}
+                    KNOWN_ROOT_KEYS = {"workspace", "checks", "mapeos", "version", "language"}
                     unknown_keys = set(raw.keys()) - KNOWN_ROOT_KEYS
                     if unknown_keys:
                         logger.warning(
@@ -620,6 +658,8 @@ def load_dredd_config(workspace_dir: Optional[Path | str] = None) -> Optional[Dr
                         default_source=ws_raw.get("default_source", "moodle"),
                         github_default_branch=ws_raw.get("github_default_branch", "main"),
                         deckard_bank_dir=str(ws_raw.get("deckard_bank_dir") or ""),
+                        language=str(ws_raw.get("language") or raw.get("language") or "auto"),
+                        adapter_config=dict(ws_raw.get("adapter_config") or {}),
                     )
 
                     checks_cfg = ToolChecksConfig.from_dict(raw.get("checks", {}))
@@ -646,6 +686,7 @@ def load_dredd_config(workspace_dir: Optional[Path | str] = None) -> Optional[Dr
                                     targets_docente=m.get("targets_docente"),
                                     ejercicios_banco={str(k): str(v) for k, v in (m.get("ejercicios_banco") or {}).items()},
                                     casos_catedra=m.get("casos_catedra", True) is not False,
+                                    language=m.get("language"),
                                 )
                             )
                     return DreddConfig(
@@ -669,6 +710,7 @@ def init_workspace(
     guias_dir: str = "guias",
     plantillas_dir: str = "plantillas",
     force: bool = False,
+    language: str = "auto",
 ) -> Tuple[Path, Path]:
     """Inicializa la estructura de carpetas y crea el archivo dredd.yaml con mapeos preconfigurados."""
     root = Path(target_dir).resolve()
@@ -718,6 +760,7 @@ ejercicios:
                 submissions_dir=submissions_dir,
                 guias_dir=guias_dir,
                 plantillas_dir=plantillas_dir,
+                language=language,
             ),
             checks=ToolChecksConfig(
                 ripley_enabled=True,

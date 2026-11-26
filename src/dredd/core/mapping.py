@@ -177,16 +177,30 @@ class InteractiveMapper:
         activity_slug: str,
         console: Optional[Console] = None,
         submissions_dir: Optional[Path] = None,
+        language: str = "auto",
     ) -> None:
         self.workspace_dir = Path(workspace_dir)
         self.activity_slug = activity_slug
         self.console = console or Console()
         self.submissions_dir = submissions_dir
+        self.language = language
 
         target_dir = self.submissions_dir or (self.workspace_dir / self.activity_slug)
         mapping_file = target_dir / "mappings.json"
         self.store = MappingStore(self.workspace_dir, self.activity_slug, mapping_file=mapping_file)
         self.guide = load_activity_guide(target_dir, self.activity_slug, self.workspace_dir)
+
+    def _extensiones_activas(self) -> set[str]:
+        from dredd.core.lenguajes import (
+            extensiones_fuente_globales,
+            normalizar_lenguaje,
+            resolver_adaptador,
+        )
+
+        norm = normalizar_lenguaje(self.language)
+        if norm == "auto":
+            return extensiones_fuente_globales()
+        return set(resolver_adaptador(norm).extensiones_fuente)
 
     def collect_all_student_files(
         self,
@@ -197,37 +211,37 @@ class InteractiveMapper:
             return []
 
         entries: List[FileMappingEntry] = []
+        exts = self._extensiones_activas()
 
         for s_dir in sorted(activity_dir.iterdir()):
             if not s_dir.is_dir() or s_dir.name.startswith((".", "_")) or s_dir.name in ("guia", "guide", "templates", "informe", "baseline", "_baseline"):
                 continue
 
             rev_dirs = [d for d in s_dir.iterdir() if d.is_dir() and re.match(r"^r\d+$", d.name)]
-            if not rev_dirs:
-                # Si no tiene revisiones rN, buscar directo en el directorio
-                c_files = sorted(s_dir.glob("*.c"))
-            else:
-                latest_rev = sorted(rev_dirs, key=lambda d: int(d.name[1:]))[-1]
-                c_files = sorted(latest_rev.glob("*.c"))
+            base_scan = sorted(rev_dirs, key=lambda d: int(d.name[1:]))[-1] if rev_dirs else s_dir
+            source_files = [
+                f for f in sorted(base_scan.iterdir())
+                if f.is_file() and f.suffix.lower() in exts
+            ]
 
-            for c_file in c_files:
+            for src_file in source_files:
                 file_text = None
                 try:
-                    file_text = c_file.read_text(encoding="utf-8", errors="ignore")
+                    file_text = src_file.read_text(encoding="utf-8", errors="ignore")
                 except Exception:
                     pass
 
                 effective = self.store.get_effective_mapping(
-                    s_dir.name, c_file.name, available_exercises, file_content=file_text, guide=self.guide
+                    s_dir.name, src_file.name, available_exercises, file_content=file_text, guide=self.guide
                 )
-                detected = heuristic_match(c_file.name, available_exercises, file_content=file_text, guide=self.guide)
+                detected = heuristic_match(src_file.name, available_exercises, file_content=file_text, guide=self.guide)
                 is_unmapped = effective is None
 
                 entries.append(
                     FileMappingEntry(
                         student_slug=s_dir.name,
-                        filename=c_file.name,
-                        file_path=c_file,
+                        filename=src_file.name,
+                        file_path=src_file,
                         detected_exercise=detected,
                         current_mapping=effective,
                         is_ambiguous_or_unmapped=is_unmapped,
@@ -245,7 +259,7 @@ class InteractiveMapper:
     ) -> int:
         entries = self.collect_all_student_files(available_exercises)
         if not entries:
-            self.console.print("[yellow]No se encontraron archivos .c para mapear.[/yellow]")
+            self.console.print("[yellow]No se encontraron archivos fuente para mapear.[/yellow]")
             return 0
 
         changes_count = 0

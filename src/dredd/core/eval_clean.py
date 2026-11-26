@@ -53,7 +53,10 @@ def es_archivo_informe(path: Path, alumno: Optional[str] = None) -> bool:
     nombre_lower = path.name.lower()
     if nombre_lower in ARCHIVOS_PROTEGIDOS:
         return False
-    if nombre_lower.endswith((".c", ".h", ".yaml", ".yml", ".json", ".in", ".out")):
+    if nombre_lower.endswith((
+        ".c", ".h", ".py", ".java", ".gradle", ".xml", ".properties",
+        ".toml", ".yaml", ".yml", ".json", ".in", ".out",
+    )):
         return False
     if PATRON_ARCHIVO_INFORME.match(path.name):
         return True

@@ -8,8 +8,15 @@ import shutil
 from typing import List, Optional, Set
 
 
-SOURCE_EXTENSIONS = {".c", ".h", ".in", ".out", ".txt", ".dat", ".csv"}
-IMPORTANT_FILENAMES = {"makefile", "cmakelists.txt", "casos.yaml", "tests.json"}
+SOURCE_EXTENSIONS = {
+    ".c", ".h", ".py", ".java", ".gradle", ".xml", ".properties",
+    ".toml", ".in", ".out", ".txt", ".dat", ".csv",
+}
+IMPORTANT_FILENAMES = {
+    "makefile", "cmakelists.txt", "casos.yaml", "tests.json",
+    "pyproject.toml", "requirements.txt", "pytest.ini",
+    "build.gradle", "settings.gradle", "pom.xml",
+}
 IGNORED_SUBDIRS = {"__macosx", ".git", ".idea", ".vscode", "__pycache__"}
 
 

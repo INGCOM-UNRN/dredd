@@ -10,6 +10,7 @@ def cmd_moodle_ingest(
     zip_file: Path = typer.Argument(..., exists=True, help="Archivo ZIP descargado de Moodle con las entregas de la tarea."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Solo simular la extracción sin escribir en disco."),
     force: bool = typer.Option(False, "--force", "-f", help="Re-ingestar sobrescribiendo revisiones previas."),
+    lang: Optional[str] = typer.Option(None, "--lang", help="Lenguaje de las entregas para filtrar fuentes (auto, c, python, java)."),
 ) -> None:
     """Descomprime, normaliza a UTF-8 y versiona (SHA-256) entregas masivas de Moodle."""
     from dredd.core.ingest import MoodleIngestor
@@ -23,7 +24,7 @@ def cmd_moodle_ingest(
         workspace_dir = zip_file.parent
 
     ingestor = MoodleIngestor(workspace_dir)
-    info, results = ingestor.process_zip(zip_file, dry_run=dry_run, force=force)
+    info, results = ingestor.process_zip(zip_file, dry_run=dry_run, force=force, language=lang)
 
     new_revs = sum(1 for r in results if r.is_new_revision)
     console.print(f"\n[bold green]✓ Ingesta completada para '{info.activity_name}' ({info.activity_slug})[/bold green]")

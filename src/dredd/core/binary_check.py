@@ -130,6 +130,12 @@ def audit_and_purge_binaries_from_dir(target_path: Path) -> List[Dict[str, Any]]
             sample = None
 
         is_bin, reason = is_binary_file(f.name, sample)
+        if is_bin and f.suffix.lower() == ".out" and (f.with_suffix(".in").is_file() or "tests" in f.parts or "casos" in f.parts):
+            # Pares textuales de prueba `.in`/`.out` no son binarios `a.out` si no tienen magic binario ni '\x00'.
+            tiene_magic = bool(sample and any(sample.startswith(m) for m, _ in BINARY_MAGIC_SIGNATURES))
+            tiene_nulos = bool(sample and b"\x00" in sample)
+            if not tiene_magic and not tiene_nulos:
+                is_bin = False
         if is_bin:
             try:
                 rel_path = f.relative_to(target_path).as_posix()

@@ -13,8 +13,15 @@ from slugify import slugify
 
 from dredd.core.db import DatabaseManager, StudentRecord
 
-ALLOWED_EXTENSIONS = {".c", ".h", ".mk", ".md", ".txt"}
-ALLOWED_FILENAMES = {"makefile", "cmakelists.txt"}
+ALLOWED_EXTENSIONS = {
+    ".c", ".h", ".mk", ".md", ".txt",
+    ".py", ".java", ".gradle", ".xml", ".toml", ".yaml", ".yml", ".json", ".properties", ".in",
+}
+ALLOWED_FILENAMES = {
+    "makefile", "cmakelists.txt",
+    "pyproject.toml", "requirements.txt", "pytest.ini",
+    "build.gradle", "settings.gradle", "pom.xml",
+}
 IGNORED_PARTS = {"__macosx", ".ds_store", ".git", ".vscode", ".idea"}
 
 
@@ -26,14 +33,30 @@ def is_ignored(path_str: str) -> bool:
     return False
 
 
-def is_allowed_file(rel_path_str: str) -> bool:
+def is_allowed_file(rel_path_str: str, language: str = "auto") -> bool:
     """Valida si un archivo es admisible como código o configuración del proyecto."""
     if is_ignored(rel_path_str):
         return False
+    from dredd.core.lenguajes import (
+        archivos_proyecto_globales,
+        extensiones_ingesta_globales,
+        normalizar_lenguaje,
+        resolver_adaptador,
+    )
+
     p = Path(rel_path_str)
-    if p.name.lower() in ALLOWED_FILENAMES:
+    norm = normalizar_lenguaje(language)
+    if norm == "auto":
+        archivos = ALLOWED_FILENAMES | archivos_proyecto_globales()
+        exts = ALLOWED_EXTENSIONS | extensiones_ingesta_globales()
+    else:
+        ad = resolver_adaptador(norm)
+        archivos = set(ad.archivos_proyecto)
+        exts = set(ad.extensiones_ingesta)
+
+    if p.name.lower() in archivos:
         return True
-    return p.suffix.lower() in ALLOWED_EXTENSIONS
+    return p.suffix.lower() in exts
 
 
 PROTECTED_ROOT_DIRS = {"ejercicios", "src", "lib", "test", "tests"}
@@ -76,6 +99,7 @@ def extract_archive_payload(
     binary_collector: Optional[List[Tuple[str, str]]] = None,
     base_prefix: str = "",
     depth: int = 0,
+    language: str = "auto",
 ) -> List[Tuple[str, bytes]]:
     """Extrae archivos permitidos de un ZIP o TAR en memoria normalizando barras, jerarquías y descomprimiendo recursivamente."""
     if depth > 10:
@@ -124,6 +148,7 @@ def extract_archive_payload(
                             binary_collector=binary_collector,
                             base_prefix=inner_base,
                             depth=depth + 1,
+                            language=language,
                         )
                         for n_path, n_bytes in nested_res:
                             raw_files[n_path] = n_bytes
@@ -133,7 +158,7 @@ def extract_archive_payload(
                             if binary_collector is not None:
                                 binary_collector.append((full_rel, bin_reason))
                             continue
-                        if is_allowed_file(full_rel):
+                        if is_allowed_file(full_rel, language=language):
                             raw_files[full_rel] = file_bytes
             return list(raw_files.items())
         except Exception:
@@ -172,6 +197,7 @@ def extract_archive_payload(
                             binary_collector=binary_collector,
                             base_prefix=inner_base,
                             depth=depth + 1,
+                            language=language,
                         )
                         for n_path, n_bytes in nested_res:
                             raw_files[n_path] = n_bytes
@@ -181,7 +207,7 @@ def extract_archive_payload(
                             if binary_collector is not None:
                                 binary_collector.append((full_rel, bin_reason))
                             continue
-                        if is_allowed_file(full_rel):
+                        if is_allowed_file(full_rel, language=language):
                             raw_files[full_rel] = file_bytes
             return list(raw_files.items())
     except Exception:
@@ -332,6 +358,7 @@ class MoodleIngestor:
         zip_path: str | Path,
         dry_run: bool = False,
         force: bool = False,
+        language: Optional[str] = None,
     ) -> Tuple[ParsedMoodleZip, List[IngestionResult]]:
         zip_file_path = Path(zip_path)
         if not zip_file_path.exists():
@@ -343,6 +370,7 @@ class MoodleIngestor:
         from dredd.core.config import load_dredd_config
         cfg = load_dredd_config(self.workspace_dir)
         rule = (cfg.find_mapping_for_zip(zip_file_path.name) or cfg.find_mapping_for_activity(moodle_info.activity_slug)) if cfg else None
+        effective_lang = language or (rule.language if rule and rule.language else None) or (cfg.workspace.language if cfg else "auto")
 
         if rule:
             moodle_info.activity_slug = rule.entrega
@@ -438,7 +466,11 @@ class MoodleIngestor:
 
                     # Si es archivo comprimido (zip, tar, o bytes de zip/tar), extraer su contenido respetando jerarquías
                     if ext in (".zip", ".tar", ".gz", ".tgz") or zipfile.is_zipfile(io.BytesIO(raw_content)) or tarfile.is_tarfile(io.BytesIO(raw_content)):
-                        archived_files = extract_archive_payload(raw_content, binary_collector=binary_collector)
+                        archived_files = extract_archive_payload(
+                            raw_content,
+                            binary_collector=binary_collector,
+                            language=effective_lang,
+                        )
                         if archived_files:
                             for rel_path, file_bytes in archived_files:
                                 text, _ = normalize_encoding(file_bytes)
@@ -459,7 +491,7 @@ class MoodleIngestor:
                                     reason="Archivo comprimido sin fuentes válidos o formato no soportado",
                                 )
                             )
-                    elif is_allowed_file(fpath):
+                    elif is_allowed_file(fpath, language=effective_lang):
                         text, _ = normalize_encoding(raw_content)
                         utf8_bytes = text.encode("utf-8")
                         sha256 = hashlib.sha256(utf8_bytes).hexdigest()

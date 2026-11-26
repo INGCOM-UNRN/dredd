@@ -14,6 +14,7 @@ def cmd_init(
     entregas_dir: str = typer.Option("entregas", "--entregas", "-e", help="Directorio para las entregas descompactadas."),
     guias_dir: str = typer.Option("guias", "--guias", "-g", help="Directorio para las guías de Deckard."),
     force: bool = typer.Option(False, "--force", "-f", help="Sobrescribir dredd.yaml si ya existe."),
+    lang: str = typer.Option("auto", "--lang", help="Lenguaje por defecto del workspace (auto, c, python, java)."),
 ) -> None:
     """Inicializa un espacio de trabajo de Dredd con carpetas estructuradas y mapeo declarativo en dredd.yaml."""
     from dredd.core.config import init_workspace
@@ -25,6 +26,7 @@ def cmd_init(
         submissions_dir=entregas_dir,
         guias_dir=guias_dir,
         force=force,
+        language=lang,
     )
 
     console.print(f"\n[bold green]✓ Espacio de trabajo de Dredd inicializado con éxito en:[/bold green] [cyan]{root}[/cyan]\n")

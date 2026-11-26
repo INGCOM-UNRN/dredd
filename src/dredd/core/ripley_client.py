@@ -1240,7 +1240,7 @@ def _summarize_valgrind(all_tests: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def run_ripley_analysis(
+def _run_c_analysis(
     target_path: Path,
     guide: Optional[Any] = None,
     activity_slug: Optional[str] = None,
@@ -1249,7 +1249,7 @@ def run_ripley_analysis(
     tipo_entrega: Optional[str] = None,
     baseline_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Evalúa una entrega: compilación según el modo, reglas P1, seguridad, casos, memoria y estilo."""
+    """Evalúa una entrega en C: compilación según el modo, reglas P1, seguridad, casos, memoria y estilo."""
     from dredd.core.config import MODE_MAKEFILES_INDIVIDUALES, MODE_PROYECTO
 
     if guide is None:
@@ -1349,3 +1349,71 @@ def run_ripley_analysis(
     res_dict["baseline_info"] = baseline_info
 
     return res_dict
+
+
+def run_ripley_analysis(
+    target_path: Path,
+    guide: Optional[Any] = None,
+    activity_slug: Optional[str] = None,
+    workspace_dir: Optional[Path] = None,
+    checks_override: Optional[Any] = None,
+    tipo_entrega: Optional[str] = None,
+    baseline_dir: Optional[Path] = None,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Despacha la evaluación de la entrega al adaptador de lenguaje correspondiente."""
+    from dredd.core.lenguajes import detectar_lenguaje, normalizar_lenguaje, resolver_adaptador
+
+    lang_cli = normalizar_lenguaje(language) if language else "auto"
+    if lang_cli not in ("auto", "c"):
+        return resolver_adaptador(lang_cli, target_path).evaluar_entrega(
+            target_path,
+            guide=guide,
+            activity_slug=activity_slug,
+            workspace_dir=workspace_dir,
+            checks_override=checks_override,
+            tipo_entrega=tipo_entrega,
+            baseline_dir=baseline_dir,
+        )
+
+    if lang_cli == "auto":
+        detectado = detectar_lenguaje(target_path)
+        hay_dredd_yaml = bool(
+            (workspace_dir is not None and (workspace_dir / "dredd.yaml").is_file())
+            or (target_path / "dredd.yaml").is_file()
+        )
+        lang_efectivo = detectado
+        if detectado != "c" or hay_dredd_yaml:
+            from dredd.core.config import DreddConfig, load_dredd_config
+
+            cfg = None
+            for cand in (workspace_dir, target_path):
+                if cand is not None:
+                    cfg = load_dredd_config(cand)
+                    if cfg is not None:
+                        break
+            cfg = cfg or DreddConfig()
+            get_lang = getattr(cfg, "get_language", None)
+            if callable(get_lang):
+                lang_efectivo = get_lang(activity_slug=activity_slug, target_path=target_path, cli_override=language)
+        lang_norm = normalizar_lenguaje(lang_efectivo) if lang_efectivo else "c"
+        if lang_norm != "c":
+            return resolver_adaptador(lang_norm, target_path).evaluar_entrega(
+                target_path,
+                guide=guide,
+                activity_slug=activity_slug,
+                workspace_dir=workspace_dir,
+                checks_override=checks_override,
+                tipo_entrega=tipo_entrega,
+                baseline_dir=baseline_dir,
+            )
+
+    return _run_c_analysis(
+        target_path,
+        guide=guide,
+        activity_slug=activity_slug,
+        workspace_dir=workspace_dir,
+        checks_override=checks_override,
+        tipo_entrega=tipo_entrega,
+        baseline_dir=baseline_dir,
+    )

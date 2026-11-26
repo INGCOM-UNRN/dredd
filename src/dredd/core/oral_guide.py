@@ -174,17 +174,20 @@ PREGUNTAS_POR_BANDERA_GIT = [
 
 def generar_guia(repo: Path, nombre_alumno: Optional[str] = None,
                  ejercicio: Optional[str] = None,
-                 correr_ripley: bool = True) -> str:
+                 correr_ripley: bool = True,
+                 language: str = "auto") -> str:
     """Genera la guía oral completa en Markdown."""
     alumno = nombre_alumno or repo.name.replace("-", " ").title()
 
+    from dredd.core.lenguajes import resolver_adaptador
     from dredd.core.ripley_client import run_ripley_analysis
 
+    adaptador = resolver_adaptador(language, repo)
     banderas = analizar_historial(repo)
     reporte: Dict = {}
-    if correr_ripley and any(repo.glob("**/*.c")):
+    if correr_ripley and adaptador.archivos_fuente(repo):
         try:
-            reporte = run_ripley_analysis(repo)
+            reporte = run_ripley_analysis(repo, language=adaptador.nombre)
         except Exception:
             reporte = {}
 

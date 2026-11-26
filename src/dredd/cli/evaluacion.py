@@ -40,6 +40,7 @@ def ejecutar_evaluacion(
     baseline: Optional[Path] = None,
     json_output: bool = False,
     resume: bool = False,
+    language: Optional[str] = None,
 ) -> None:
     """Ejecuta el ciclo de evaluación sobre una o varias entregas de estudiantes.
 
@@ -58,6 +59,7 @@ def ejecutar_evaluacion(
     if template_dir is not None and not isinstance(template_dir, Path):
         template_dir = Path(template_dir)
     tipo_entrega = _unwrap_cli_value(tipo_entrega, None)
+    language = _unwrap_cli_value(language, None)
     dry_run = bool(_unwrap_cli_value(dry_run, False))
     failed_only = bool(_unwrap_cli_value(failed_only, False))
     resume = bool(_unwrap_cli_value(resume, False))
@@ -215,6 +217,7 @@ def ejecutar_evaluacion(
                     workspace_dir=ws_dir,
                     tipo_entrega=effective_tipo,
                     baseline_dir=baseline,
+                    language=language,
                 )
 
                 generate_student_report(
@@ -356,6 +359,11 @@ def cmd_eval(
         "-w",
         help="Directorio raíz del workspace.",
     ),
+    lang: Optional[str] = typer.Option(
+        None,
+        "--lang",
+        help="Lenguaje objetivo (auto, c, python, java).",
+    ),
 ) -> None:
     """Clona/actualiza el repositorio o evalúa entregas locales, ejecuta el análisis con Ripley y genera el informe Markdown."""
     if exercise == "clean":
@@ -388,6 +396,7 @@ def cmd_eval(
         workspace_dir=workspace,
         failed_only=failed_only,
         resume=resume,
+        language=lang,
     )
 
 

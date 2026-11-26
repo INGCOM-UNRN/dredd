@@ -259,6 +259,7 @@ def _comando_bwrap(
     cwd_dir: Optional[str],
     flags: List[str],
     extra: Optional[List[str]] = None,
+    extra_ro_binds: Optional[List[Path]] = None,
 ) -> List[str]:
     """Arma el comando bwrap con montajes mínimos para ejecutar `cmd`.
 
@@ -273,12 +274,29 @@ def _comando_bwrap(
     if ejecutable is not None and not ejecutable.is_absolute() and cwd_dir:
         ejecutable = Path(cwd_dir) / ejecutable
     if ejecutable is not None and ejecutable.is_file():
-        directorio = str(ejecutable.resolve().parent)
+        resuelto = ejecutable.resolve()
+        directorio = str(resuelto.parent)
         if not (cwd_dir and (directorio == cwd_dir or directorio.startswith(cwd_dir + os.sep))):
-            args += ["--ro-bind", directorio, directorio]
-        cmd = [str(ejecutable.resolve())] + list(cmd[1:])
+            # Si un runtime autocontenido (Python/miniconda, JDK) vive en <prefix>/bin/<exe>
+            # fuera de /usr, montar también <prefix> en solo lectura para sus bibliotecas.
+            raiz_prefix = resuelto.parent.parent if resuelto.parent.name == "bin" else resuelto.parent
+            evitar = {"/", "/home", "/tmp", "/var", str(Path.home().resolve()), *_DIRECTORIOS_DEL_SISTEMA}
+            es_runtime_autocontenido = (
+                resuelto.parent.name == "bin"
+                and not str(raiz_prefix).startswith("/tmp")
+                and str(raiz_prefix) not in evitar
+                and ((raiz_prefix / "lib").is_dir() or (raiz_prefix / "lib64").is_dir())
+            )
+            bind_dir = str(raiz_prefix) if es_runtime_autocontenido else directorio
+            args += ["--ro-bind", bind_dir, bind_dir]
+        cmd = [str(resuelto)] + list(cmd[1:])
     if cwd_dir:
         args += ["--bind", cwd_dir, cwd_dir, "--chdir", cwd_dir]
+    for bind_path in extra_ro_binds or ():
+        objetivo = Path(bind_path).resolve()
+        if objetivo.exists():
+            bind_str = str(objetivo)
+            args += ["--ro-bind", bind_str, bind_str]
     return args + ["--die-with-parent", "--"] + list(cmd)
 
 
@@ -356,15 +374,17 @@ def execute_sandboxed(
     timeout: float = 5.0,
     max_memory_mb: int = 64,
     workspace: Optional[Path] = None,
+    allow_nostromo: bool = True,
+    extra_ro_binds: Optional[List[Path]] = None,
 ) -> Tuple[int, str, str, bool]:
-    """Ejecuta un binario C en sandbox delegando en nostromo, o con bubblewrap propio.
+    """Ejecuta un binario en sandbox delegando en nostromo (opcional) o con bubblewrap propio.
 
     Sin nostromo ni bubblewrap funcional la entrega no se ejecuta, salvo que se
     exporte DREDD_PERMITIR_SIN_SANDBOX=1 (entonces corre solo con setrlimit).
 
     Devuelve (returncode, stdout, stderr, timeout_or_killed).
     """
-    nostromo_fn = _try_import_nostromo()
+    nostromo_fn = _try_import_nostromo() if allow_nostromo else None
     if nostromo_fn and cmd:
         bin_path = Path(cmd[0])
         res = nostromo_fn(
@@ -385,7 +405,11 @@ def execute_sandboxed(
         flags = _flags_aislamiento(bwrap_bin, requerir_red_aislada=False)
         if flags is not None:
             resultado = _ejecutar_con_bwrap(
-                _comando_bwrap(bwrap_bin, cmd, cwd_dir, flags), input_data, timeout, cwd_dir, "TIMEOUT"
+                _comando_bwrap(bwrap_bin, cmd, cwd_dir, flags, extra_ro_binds=extra_ro_binds),
+                input_data,
+                timeout,
+                cwd_dir,
+                "TIMEOUT",
             )
             if resultado is not None:
                 return resultado

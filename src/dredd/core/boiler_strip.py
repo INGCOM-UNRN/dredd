@@ -17,12 +17,18 @@ Estrategia por líneas normalizadas:
 from __future__ import annotations
 
 import re
-from typing import Dict, List  # noqa: F401
+from typing import Dict, Iterable, List, Optional  # noqa: F401
 from pathlib import Path
 
 
 def _normalizar_linea(linea: str) -> str:
     sin_comentarios = re.sub(r"//.*$", "", linea)
+    # Quitar comentarios estilo Python sin borrar directivas de preprocesador C (`#include`, `#define`, etc.)
+    sin_comentarios = re.sub(
+        r"(?<!\S)#(?!\s*(?:include|define|ifdef|ifndef|if|else|elif|endif|pragma)\b).*$",
+        "",
+        sin_comentarios,
+    )
     return re.sub(r"\s+", " ", sin_comentarios).strip()
 
 
@@ -55,14 +61,17 @@ class BoilerStripper:
         self._frases: set[frozenset] = set()  # n-gramas de línea de la plantilla
         self._listado: set[str] = set()
 
-    def cargar_plantilla(self, ruta: Path | str) -> int:
-        """Carga una plantilla (archivo o directorio .c/.h) y devuelve las
+    def cargar_plantilla(self, ruta: Path | str, extensiones: Optional[Iterable[str]] = None) -> int:
+        """Carga una plantilla (archivo o directorio fuente) y devuelve las
         líneas significativas incorporadas."""
+        from dredd.core.lenguajes import extensiones_fuente_globales
+
+        exts = {e.lower() for e in extensiones} if extensiones is not None else extensiones_fuente_globales()
         ruta = Path(ruta)
         textos: list[str] = []
         if ruta.is_dir():
             for archivo in sorted(ruta.rglob("*")):
-                if archivo.suffix in (".c", ".h") and archivo.is_file():
+                if archivo.suffix.lower() in exts and archivo.is_file():
                     textos.append(archivo.read_text(encoding="utf-8", errors="replace"))
         elif ruta.is_file():
             textos.append(ruta.read_text(encoding="utf-8", errors="replace"))
@@ -117,21 +126,28 @@ class BoilerStripper:
         return "\n".join(colapsado)
 
 
-def strip_template(entregas_dir: Path, plantilla: Path | str,
-                   ventanas_minimas: int = 2) -> Dict[str, str]:
-    """Aplica BoilerStripper a todos los *.c de cada alumno en ``entregas_dir``.
+def strip_template(
+    entregas_dir: Path,
+    plantilla: Path | str,
+    ventanas_minimas: int = 2,
+    language: str = "auto",
+) -> Dict[str, str]:
+    """Aplica BoilerStripper a los archivos fuente de cada alumno en ``entregas_dir``.
 
     Devuelve {alumno: código_sanitizado} sin escribir archivos.
     """
+    from dredd.core.lenguajes import resolver_adaptador
+
+    adaptador = resolver_adaptador(language, entregas_dir)
     stripper = BoilerStripper(ventanas_minimas=ventanas_minimas)
-    stripper.cargar_plantilla(plantilla)
+    stripper.cargar_plantilla(plantilla, extensiones=adaptador.extensiones_fuente)
 
     resultados: Dict[str, str] = {}
     for dir_alumno in sorted(p for p in entregas_dir.iterdir()
                              if p.is_dir() and not p.name.startswith(".")):
         trozos: List[str] = []
-        for c_file in sorted(dir_alumno.glob("**/*.c")):
-            codigo = c_file.read_text(encoding="utf-8", errors="replace")
+        for src_file in adaptador.archivos_fuente(dir_alumno):
+            codigo = src_file.read_text(encoding="utf-8", errors="replace")
             trozos.append(stripper.limpiar(codigo))
         resultados[dir_alumno.name] = "\n\n".join(trozos)
     return resultados
